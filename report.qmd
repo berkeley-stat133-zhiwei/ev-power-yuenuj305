@@ -8,27 +8,150 @@ format: typst
 ## **Part 0: libraries**
 
 ```{r}
-
+library(tidyverse)
+library(janitor)
+library(lubridate)
+library(sf)
+library(ggplot2)
 ```
 
 ## **Part 1:** **Defining Research Question**
 
-Chosen Question:
+Chosen Question: Do states with higher growth in electric vehicle (EV) registrations also experience lower average energy prices from 2021 to 2023?
 
 ## **Part 2: Data Preparation and Cleaning**
 
 ```{r}
+renew21 <- read_csv("renew_use_2021.csv")
+renew22 <- read_csv("renew_use_2022.csv")
+renew23 <- read_csv("renew_use_2023.csv")
+avg_price <- read_csv("av_energy_price_2021-2023.csv")
+total21 <- read_csv("total_energy_use_2021.csv")
+total22 <- read_csv("total_energy_use_2022.csv")
+total23 <- read_csv("total_energy_use_2023.csv")
+ev_reg <- read_csv("ev-registrations-by_state_2023.csv")
 
+renew21 <- clean_names(renew21)
+renew22 <- clean_names(renew22)
+renew23 <- clean_names(renew23)
+avg_price <- clean_names(avg_price)
+total21 <- clean_names(total21)
+total22 <- clean_names(total22)
+total23 <- clean_names(total23)
+ev_reg <- clean_names(ev_reg)
+
+datasets <- list(renew21, renew22, renew23, avg_price, total21, total22, total23, ev_reg)
+datasets <- lapply(datasets, function(df) {
+  df %>%
+    mutate(state = str_to_title(state)) 
+})
+renew21 <- datasets[[1]]
+renew22 <- datasets[[2]]
+renew23 <- datasets[[3]]
+avg_price <- datasets[[4]]
+total21 <- datasets[[5]]
+total22 <- datasets[[6]]
+total23 <- datasets[[7]]
+ev_reg <- datasets[[8]]
+
+unique_states <- list(
+  renew21 = unique(renew21$state),
+  renew22 = unique(renew22$state),
+  renew23 = unique(renew23$state),
+  avg_price = unique(avg_price$state),
+  ev_reg = unique(ev_reg$state)
+)
+
+intersect(unique_states$renew21, unique_states$ev_reg)
 ```
 
 ## **Part 3: Joining / Pivoting Datasets for Analysis**
 
 ```{r}
+renew21 <- read_csv("renew_use_2021.csv") %>% clean_names()
+renew22 <- read_csv("renew_use_2022.csv") %>% clean_names()
+renew23 <- read_csv("renew_use_2023.csv") %>% clean_names()
 
+total21 <- read_csv("total_energy_use_2021.csv") %>% clean_names()
+total22 <- read_csv("total_energy_use_2022.csv") %>% clean_names()
+total23 <- read_csv("total_energy_use_2023.csv") %>% clean_names()
+
+avg_price <- read_csv("av_energy_price_2021-2023.csv") %>% clean_names()
+ev <- read_csv("ev-registrations-by_state_2023.csv") %>% clean_names()
+
+renew_all <- bind_rows(
+  renew21 %>% mutate(year = 2021),
+  renew22 %>% mutate(year = 2022),
+  renew23 %>% mutate(year = 2023)
+)
+
+total_all <- bind_rows(
+  total21 %>% mutate(year = 2021),
+  total22 %>% mutate(year = 2022),
+  total23 %>% mutate(year = 2023)
+)
+
+energy_combined <- renew_all %>%
+  left_join(total_all, by = c("state", "year")) %>%
+  left_join(avg_price, by = c("state", "year"))
+
+energy_combined <- energy_combined %>%
+  mutate(
+    pct_renewable = (renewable_energy / total_energy) * 100
+  )
+
+energy_summary <- energy_combined %>%
+  group_by(state) %>%
+  summarize(
+    avg_price_2021 = price[year == 2021],
+    avg_price_2023 = price[year == 2023],
+    price_change = avg_price_2023 - avg_price_2021,
+    pct_renewable_2023 = pct_renewable[year == 2023]
+  )
+
+final_data <- energy_summary %>%
+  left_join(ev, by = "state") %>%
+  mutate(
+    ev_per_million = ev_registrations / total_energy
+  )
 ```
 
 ## **Part 4: Mapping Visualization**
 
 ```{r}
+us_states <- st_read("https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json")
 
+map_data <- us_states %>%
+  left_join(final_data, by = c("name" = "state"))
+ggplot(map_data) +
+  geom_sf(aes(fill = ev_registrations)) +
+  scale_fill_viridis(option = "plasma", direction = -1) +
+  labs(
+    title = "EV Registrations by State (2023)",
+    fill = "EV Registrations",
+    caption = "Source: U.S. DOE & Stat 133 Project Data"
+  ) +
+  theme_minimal()
+ggplot(map_data) +
+  geom_sf(aes(fill = price_change)) +
+  scale_fill_viridis(option = "mako", direction = -1) +
+  labs(
+    title = "Change in Average Energy Price (2021–2023)",
+    fill = "Price Change ($/kWh)",
+    caption = "Negative = Price Decrease"
+  ) +
+  theme_minimal()
+library(patchwork)
+
+p1 <- ggplot(map_data) +
+  geom_sf(aes(fill = ev_registrations)) +
+  scale_fill_viridis(option = "plasma") +
+  labs(title = "EV Registrations (2023)", fill = "EV Count")
+
+p2 <- ggplot(map_data) +
+  geom_sf(aes(fill = price_change)) +
+  scale_fill_viridis(option = "mako") +
+  labs(title = "Energy Price Change (2021–2023)", fill = "Change ($)")
+
+p1 + p2
 ```
